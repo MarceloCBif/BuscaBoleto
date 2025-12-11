@@ -1,0 +1,11 @@
+# Dependências do projeto Busca Boleto SFTP
+# Instale com: pip install -r requirements.txt
+
+# paramiko - Para conexão SFTP (SSH File Transfer Protocol)
+paramiko>=3.0.0
+
+# pdfplumber - Para leitura de PDFs (caso precise extrair dados do boleto)
+pdfplumber>=0.9.0
+
+# Tkinter já vem instalado com Python padrão (não precisa instalar)
+# configparser já vem instalado com Python padrão (não precisa instalar)
