@@ -10,10 +10,11 @@ import sys
 import threading
 import zipfile
 import socket
+import configparser
 from datetime import datetime
 from typing import Optional, List
 
-from ftp_client import SFTPClient
+from ftp_client import SFTPClient, get_config_path
 
 
 class BuscaBoletoApp:
@@ -41,6 +42,9 @@ class BuscaBoletoApp:
         # Controle de extração de clientes
         self.extraindo_clientes = False
         self.cancelar_extracao = False
+        
+        # Carrega configurações de segurança
+        self.faixas_ip_permitidas = self.carregar_faixas_ip()
         
         # Configura o estilo
         self.configurar_estilo()
@@ -373,23 +377,52 @@ class BuscaBoletoApp:
             self.progress.stop()
             self.progress.pack_forget()
     
+    def carregar_faixas_ip(self) -> List[str]:
+        """
+        Carrega as faixas de IP permitidas do arquivo de configuração.
+        
+        Returns:
+            Lista de prefixos de IP permitidos.
+        """
+        try:
+            config_path = get_config_path()
+            if config_path and os.path.exists(config_path):
+                config = configparser.ConfigParser()
+                config.read(config_path, encoding='utf-8')
+                
+                if config.has_option('SEGURANCA', 'faixas_ip_permitidas'):
+                    faixas = config.get('SEGURANCA', 'faixas_ip_permitidas').strip()
+                    if faixas:
+                        return [f.strip() for f in faixas.split(',') if f.strip()]
+            
+            # Valor padrão se não encontrar configuração
+            return ['192.168.112.']
+        except Exception as e:
+            print(f"Erro ao carregar faixas de IP: {e}")
+            return ['192.168.112.']
+    
     def verificar_ip_permitido(self) -> bool:
         """
-        Verifica se o IP da máquina está na faixa permitida (192.168.112.xxx).
+        Verifica se o IP da máquina está em uma das faixas permitidas.
         
         Returns:
             True se o IP está na faixa permitida, False caso contrário.
         """
+        # Se não há faixas configuradas, permite qualquer IP
+        if not self.faixas_ip_permitidas:
+            return True
+        
         try:
             # Obtém o nome do host
             hostname = socket.gethostname()
             # Obtém todos os IPs da máquina
             ips = socket.gethostbyname_ex(hostname)[2]
             
-            # Verifica se algum IP está na faixa permitida
+            # Verifica se algum IP está em alguma faixa permitida
             for ip in ips:
-                if ip.startswith('192.168.112.'):
-                    return True
+                for faixa in self.faixas_ip_permitidas:
+                    if ip.startswith(faixa):
+                        return True
             
             # Tenta obter o IP conectando a um servidor externo (mais confiável)
             try:
@@ -397,8 +430,9 @@ class BuscaBoletoApp:
                 s.connect(('8.8.8.8', 80))
                 ip_local = s.getsockname()[0]
                 s.close()
-                if ip_local.startswith('192.168.112.'):
-                    return True
+                for faixa in self.faixas_ip_permitidas:
+                    if ip_local.startswith(faixa):
+                        return True
             except:
                 pass
             
@@ -800,9 +834,10 @@ class BuscaBoletoApp:
         
         # Verifica se o IP está na faixa permitida
         if not self.verificar_ip_permitido():
+            faixas_str = ', '.join(self.faixas_ip_permitidas) if self.faixas_ip_permitidas else 'nenhuma'
             messagebox.showerror(
                 "Acesso Negado", 
-                "Este aplicativo só pode ser utilizado na rede interna (192.168.112.xxx).\n\n"
+                f"Este aplicativo só pode ser utilizado nas redes permitidas ({faixas_str}xxx).\n\n"
                 "Verifique sua conexão de rede."
             )
             return
@@ -1177,9 +1212,10 @@ class BuscaBoletoApp:
         
         # Verifica se o IP está na faixa permitida
         if not self.verificar_ip_permitido():
+            faixas_str = ', '.join(self.faixas_ip_permitidas) if self.faixas_ip_permitidas else 'nenhuma'
             messagebox.showerror(
                 "Acesso Negado", 
-                "Este aplicativo só pode ser utilizado na rede interna (192.168.112.xxx).\n\n"
+                f"Este aplicativo só pode ser utilizado nas redes permitidas ({faixas_str}xxx).\n\n"
                 "Verifique sua conexão de rede."
             )
             return
