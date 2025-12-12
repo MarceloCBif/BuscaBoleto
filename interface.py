@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from ftp_client import SFTPClient, get_config_path
+from nfse_client import NFSeClient
 
 
 class BuscaBoletoApp:
@@ -28,13 +29,16 @@ class BuscaBoletoApp:
             root: Janela principal do Tkinter.
         """
         self.root = root
-        self.root.title("Busca Boleto Ektech")
+        self.root.title("Utilitário Notas e Boletos - Ektech")
         self.root.geometry("900x700")
         self.root.minsize(600, 400)
         
         # Cliente SFTP
         self.ftp_client: Optional[SFTPClient] = None
         self.conectado = False
+        
+        # Cliente NFSe
+        self.nfse_client: Optional[NFSeClient] = None
         
         # Lista de resultados da busca
         self.resultados_busca = []
@@ -148,7 +152,7 @@ class BuscaBoletoApp:
         
         ttk.Label(
             header_frame, 
-            text="🔍 Busca de Boletos SFTP", 
+            text="🔍 Utilitário Notas e Boletos - Ektech", 
             style='Header.TLabel'
         ).pack(side=tk.LEFT)
         
@@ -162,7 +166,7 @@ class BuscaBoletoApp:
         self.lbl_status_conexao.pack(side=tk.RIGHT, padx=10)
         
         # === Frame de Busca por Número ===
-        busca_frame = ttk.LabelFrame(main_frame, text="Buscar por Número do Boleto", padding="10")
+        busca_frame = ttk.LabelFrame(main_frame, text="Buscar por Número da Nota", padding="10")
         busca_frame.pack(fill=tk.X, pady=(0, 5))
         
         # Frame para número
@@ -183,18 +187,6 @@ class BuscaBoletoApp:
             style='Accent.TButton'
         )
         self.btn_buscar.pack(side=tk.RIGHT)
-        
-        # Frame para checkboxes
-        opcoes_frame = ttk.Frame(busca_frame)
-        opcoes_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        # Checkbox para busca literal (com máscara)
-        self.var_busca_literal = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            opcoes_frame,
-            text="Busca literal (número com zeros à esquerda - busca em todas as filiais)",
-            variable=self.var_busca_literal
-        ).pack(side=tk.LEFT, padx=(0, 20))
         
         # === Frame de Busca por Data ===
         busca_data_frame = ttk.LabelFrame(main_frame, text="Buscar por Data de Criação", padding="10")
@@ -294,6 +286,8 @@ class BuscaBoletoApp:
         # Configurar tags para cores diferentes
         self.tree_resultados.tag_configure('boleto', background='#B3E5FC')   # Azul claro
         self.tree_resultados.tag_configure('nf', background='#B3E5FC')       # Azul claro
+        self.tree_resultados.tag_configure('xml', background='#C8E6C9')      # Verde claro (XML NFSe)
+        self.tree_resultados.tag_configure('pdf_xml', background='#DCEDC8')  # Verde mais claro (PDF gerado do XML)
         self.tree_resultados.tag_configure('separador', background='white')  # Branco
         
         # Bind para clique no checkbox
@@ -541,6 +535,113 @@ class BuscaBoletoApp:
         
         # Limpa resultados
         self.limpar_resultados()
+    
+    def verificar_e_reconectar(self, callback=None) -> bool:
+        """
+        Verifica se a conexão SFTP está ativa e reconecta se necessário.
+        
+        Args:
+            callback: Função a ser chamada após reconexão bem-sucedida.
+            
+        Returns:
+            True se a conexão está ativa ou reconectou com sucesso.
+        """
+        # Se não está marcado como conectado, não precisa verificar
+        if not self.conectado:
+            return False
+        
+        # Verifica se a conexão está realmente ativa
+        if self.ftp_client and self.ftp_client.verificar_conexao():
+            return True
+        
+        # Conexão caiu - precisa reconectar
+        self.conectado = False
+        self.lbl_status_conexao.config(text="● Reconectando...", foreground='orange')
+        self._reconectar_com_modal(callback)
+        return False
+    
+    def _reconectar_com_modal(self, callback=None):
+        """
+        Reconecta ao servidor SFTP exibindo um modal de progresso.
+        
+        Args:
+            callback: Função a ser chamada após reconexão bem-sucedida.
+        """
+        # Cria janela modal
+        self.modal_reconexao = tk.Toplevel(self.root)
+        self.modal_reconexao.title("Reconectando...")
+        self.modal_reconexao.geometry("350x120")
+        self.modal_reconexao.resizable(False, False)
+        self.modal_reconexao.transient(self.root)
+        self.modal_reconexao.grab_set()
+        
+        # Centraliza o modal
+        self.modal_reconexao.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 175
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 60
+        self.modal_reconexao.geometry(f"+{x}+{y}")
+        
+        # Conteúdo do modal
+        frame = ttk.Frame(self.modal_reconexao, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="⚠️ Conexão perdida com o servidor", font=('Segoe UI', 11, 'bold')).pack(pady=(0, 5))
+        ttk.Label(frame, text="🔄 Reconectando automaticamente...", font=('Segoe UI', 10)).pack(pady=(0, 10))
+        
+        # Barra de progresso indeterminada
+        progress = ttk.Progressbar(frame, mode='indeterminate', length=300)
+        progress.pack()
+        progress.start(10)
+        
+        # Impede fechar o modal
+        self.modal_reconexao.protocol("WM_DELETE_WINDOW", lambda: None)
+        
+        self._reconexao_callback_pendente = callback
+        
+        def reconectar_thread():
+            try:
+                # Desconecta primeiro para limpar
+                if self.ftp_client:
+                    self.ftp_client.desconectar()
+                
+                # Tenta reconectar
+                self.ftp_client = SFTPClient()
+                sucesso, mensagem = self.ftp_client.conectar()
+                
+                self.root.after(0, lambda s=sucesso, m=mensagem: self._reconectar_callback_modal(s, m))
+            except Exception as e:
+                erro_msg = str(e)
+                self.root.after(0, lambda msg=erro_msg: self._reconectar_callback_modal(False, msg))
+        
+        thread = threading.Thread(target=reconectar_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _reconectar_callback_modal(self, sucesso: bool, mensagem: str):
+        """Callback após tentativa de reconexão com modal."""
+        # Fecha o modal
+        if hasattr(self, 'modal_reconexao') and self.modal_reconexao:
+            self.modal_reconexao.destroy()
+            self.modal_reconexao = None
+        
+        if sucesso:
+            self.conectado = True
+            self.lbl_status_conexao.config(text="● Conectado", foreground='green')
+            self.atualizar_status("Reconectado ao servidor SFTP.")
+            
+            # Executa o callback pendente (continua a operação)
+            if hasattr(self, '_reconexao_callback_pendente') and self._reconexao_callback_pendente:
+                callback = self._reconexao_callback_pendente
+                self._reconexao_callback_pendente = None
+                callback()
+        else:
+            self.conectado = False
+            self.lbl_status_conexao.config(text="● Desconectado", foreground='red')
+            self.atualizar_status(f"Erro ao reconectar: {mensagem}")
+            messagebox.showerror(
+                "Erro de Reconexão", 
+                f"Não foi possível reconectar ao servidor SFTP.\n\n{mensagem}\n\nTente novamente."
+            )
     
     def limpar_resultados(self):
         """Limpa a lista de resultados."""
@@ -853,14 +954,13 @@ class BuscaBoletoApp:
             self.conectar_com_modal(callback=self.buscar_boleto)
             return
         
-        # Formata o número se busca literal estiver ativada
-        busca_literal = self.var_busca_literal.get()
-        if busca_literal:
-            numero_busca = self.formatar_numero_boleto(numero)
-            self.atualizar_status(f"Buscando boletos e NFs (literal): {numero_busca}...")
-        else:
-            numero_busca = numero
-            self.atualizar_status(f"Buscando boletos e NFs (contém): {numero}...")
+        # Verifica se a conexão ainda está ativa (pode ter caído por inatividade)
+        if not self.verificar_e_reconectar(callback=self.buscar_boleto):
+            return
+        
+        # Formata o número com busca literal (padrão)
+        numero_busca = self.formatar_numero_boleto(numero)
+        self.atualizar_status(f"Buscando boletos e NFs: {numero_busca}...")
         
         self.mostrar_progresso(True)
         self.btn_buscar.config(state='disabled')
@@ -871,7 +971,7 @@ class BuscaBoletoApp:
                 resultados = self.ftp_client.buscar_boleto_e_nf(
                     numero_busca, 
                     busca_recursiva=True,
-                    busca_literal=busca_literal
+                    busca_literal=True
                 )
                 self.root.after(0, lambda r=resultados, n=numero_busca: self._buscar_callback(r, n))
             except Exception as e:
@@ -982,6 +1082,291 @@ class BuscaBoletoApp:
             
             # Extrai nomes de clientes em thread separada
             self._extrair_clientes_async()
+            
+            # Busca XMLs de NFSe automaticamente
+            # Coleta números únicos dos documentos encontrados
+            numeros_unicos = set()
+            for caminho, nome, data_mod, tipo in resultados:
+                numero_doc = self._extrair_numero_documento(nome)
+                if numero_doc and numero_doc != '0':
+                    numeros_unicos.add(numero_doc)
+            
+            if numeros_unicos:
+                self._buscar_xmls_nfse_async(list(numeros_unicos))
+    
+    def _buscar_xmls_nfse_async(self, numeros: list):
+        """
+        Busca XMLs de NFSe para os números informados em thread separada.
+        
+        Args:
+            numeros: Lista de números de documentos para buscar XML.
+        """
+        def buscar_thread():
+            # Inicializa o cliente NFSe se necessário
+            if not self.nfse_client:
+                self.nfse_client = NFSeClient()
+            
+            # Verifica se os endpoints estão configurados
+            if not self.nfse_client.endpoint_iddps or not self.nfse_client.endpoint_chave_acesso:
+                self.root.after(0, lambda: self.atualizar_status(
+                    "Endpoints NFSe não configurados. XML não será buscado."
+                ))
+                return
+            
+            # Verifica se o certificado está configurado
+            if not self.nfse_client.certificado_path:
+                self.root.after(0, lambda: self.atualizar_status(
+                    "Certificado digital não configurado. XML não será buscado."
+                ))
+                return
+            
+            xmls_encontrados = 0
+            erros = []
+            
+            for i, numero in enumerate(numeros):
+                self.root.after(0, lambda n=numero, idx=i, total=len(numeros): 
+                    self.atualizar_status(f"Buscando XML NFSe {idx+1}/{total} (nº {n})..."))
+                
+                try:
+                    sucesso, resultado, info = self.nfse_client.buscar_e_salvar_xml_nfse(numero)
+                    
+                    if sucesso:
+                        caminho_xml = resultado
+                        xmls_encontrados += 1
+                        
+                        # Extrai o nome do cliente do XML
+                        nome_cliente = self._extrair_nome_cliente_xml(caminho_xml)
+                        
+                        # Extrai a data de emissão do XML
+                        data_emissao = self._extrair_data_emissao_xml(caminho_xml)
+                        
+                        # Baixa o PDF diretamente da API (usando a chave de acesso)
+                        caminho_pdf = None
+                        chave_acesso = info.get('chave_acesso', '')
+                        if chave_acesso:
+                            try:
+                                sucesso_pdf, resultado_pdf = self.nfse_client.baixar_pdf_nfse(chave_acesso, numero)
+                                if sucesso_pdf:
+                                    caminho_pdf = resultado_pdf
+                            except Exception as e_pdf:
+                                erros.append(f"PDF NFSe {numero}: {str(e_pdf)}")
+                        
+                        # Adiciona o XML e PDF na lista de resultados (na thread principal)
+                        def adicionar_xml_pdf(num=numero, path_xml=caminho_xml, path_pdf=caminho_pdf, cliente=nome_cliente, data_xml=data_emissao):
+                            # Encontra o grupo correspondente e adiciona após o último item do grupo
+                            indice_inserir = None
+                            for item_id in self.tree_resultados.get_children(''):
+                                valores = self.tree_resultados.item(item_id)['values']
+                                if valores[1] != '───' and str(valores[2]) == str(num):
+                                    # Encontrou um item com o mesmo número
+                                    indice_inserir = self.tree_resultados.index(item_id) + 1
+                                    break
+                            
+                            if indice_inserir is not None:
+                                # Insere o XML
+                                nome_xml = os.path.basename(path_xml)
+                                self.tree_resultados.insert('', indice_inserir,
+                                    values=('☐', 'XML', num, cliente, data_xml, nome_xml, path_xml), 
+                                    tags=('xml',))
+                                
+                                # Insere o PDF (se foi baixado com sucesso)
+                                if path_pdf and os.path.exists(path_pdf):
+                                    nome_pdf = os.path.basename(path_pdf)
+                                    self.tree_resultados.insert('', indice_inserir + 1,
+                                        values=('☐', 'PDF-XML', num, cliente, data_xml, nome_pdf, path_pdf), 
+                                        tags=('pdf_xml',))
+                            
+                            # Atualiza contagem
+                            self._atualizar_contagem_com_xml()
+                        
+                        self.root.after(0, adicionar_xml_pdf)
+                    else:
+                        erros.append(f"NFSe {numero}: {resultado}")
+                        
+                except Exception as e:
+                    erros.append(f"NFSe {numero}: {str(e)}")
+            
+            # Finaliza
+            def finalizar():
+                if xmls_encontrados > 0:
+                    self.atualizar_status(f"Busca concluída. {xmls_encontrados} XML(s) de NFSe encontrado(s).")
+                elif erros:
+                    # Mostra apenas os primeiros 3 erros
+                    msg_erro = "\n".join(erros[:3])
+                    if len(erros) > 3:
+                        msg_erro += f"\n... e mais {len(erros) - 3} erro(s)"
+                    self.atualizar_status(f"Nenhum XML de NFSe encontrado. Erros: {len(erros)}")
+            
+            self.root.after(0, finalizar)
+        
+        thread = threading.Thread(target=buscar_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _extrair_nome_cliente_xml(self, caminho_xml: str) -> str:
+        """
+        Extrai o nome do cliente da tag <xNome> dentro de <toma> do XML da NFSe.
+        
+        Args:
+            caminho_xml: Caminho do arquivo XML.
+            
+        Returns:
+            Nome do cliente ou '-' se não encontrar.
+        """
+        try:
+            import xml.etree.ElementTree as ET
+            
+            # Lê o arquivo XML
+            tree = ET.parse(caminho_xml)
+            root = tree.getroot()
+            
+            # Procura pelo elemento tomador (toma, Tomador, etc)
+            tomador = None
+            for elem in root.iter():
+                tag_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+                if tag_name.lower() in ('toma', 'tomador', 'dest'):
+                    tomador = elem
+                    break
+            
+            # Se encontrou o tomador, busca xNome dentro dele
+            if tomador is not None:
+                for elem in tomador.iter():
+                    tag_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+                    if tag_name == 'xNome' and elem.text:
+                        return elem.text.strip()[:50]
+            
+            # Fallback: busca pelo texto do XML diretamente (regex)
+            with open(caminho_xml, 'r', encoding='utf-8') as f:
+                conteudo = f.read()
+            
+            import re
+            # Busca xNome dentro de toma/tomador/dest
+            match = re.search(r'<[^>]*(?:toma|Tomador|dest)[^>]*>.*?<[^:]*:?xNome>([^<]+)</[^:]*:?xNome>', conteudo, re.IGNORECASE | re.DOTALL)
+            if match:
+                return match.group(1).strip()[:50]
+            
+            return '-'
+            
+        except Exception as e:
+            return '-'
+    
+    def _extrair_data_emissao_xml(self, caminho_xml: str) -> str:
+        """
+        Extrai a data de emissão da tag <dhEmi> dentro de <infDPS> do XML da NFSe.
+        
+        Args:
+            caminho_xml: Caminho do arquivo XML.
+            
+        Returns:
+            Data formatada (DD/MM/AAAA HH:MM) ou '-' se não encontrar.
+        """
+        try:
+            import xml.etree.ElementTree as ET
+            
+            # Lê o arquivo XML
+            tree = ET.parse(caminho_xml)
+            root = tree.getroot()
+            
+            # Procura pelo elemento infDPS
+            inf_dps = None
+            for elem in root.iter():
+                tag_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+                if tag_name == 'infDPS':
+                    inf_dps = elem
+                    break
+            
+            # Se encontrou o infDPS, busca dhEmi dentro dele
+            if inf_dps is not None:
+                for elem in inf_dps.iter():
+                    tag_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+                    if tag_name == 'dhEmi' and elem.text:
+                        # Formata a data (ex: 2025-12-12T10:30:00 -> 12/12/2025 10:30)
+                        data_str = elem.text.strip()
+                        try:
+                            # Remove timezone se houver
+                            if '+' in data_str:
+                                data_str = data_str.split('+')[0]
+                            elif 'Z' in data_str:
+                                data_str = data_str.replace('Z', '')
+                            
+                            dt = datetime.fromisoformat(data_str)
+                            return dt.strftime("%d/%m/%Y %H:%M")
+                        except:
+                            return data_str[:16] if len(data_str) >= 16 else data_str
+            
+            # Fallback: busca pelo texto do XML diretamente (regex)
+            with open(caminho_xml, 'r', encoding='utf-8') as f:
+                conteudo = f.read()
+            
+            import re
+            # Busca dhEmi dentro de infDPS
+            match = re.search(r'<[^>]*infDPS[^>]*>.*?<[^:]*:?dhEmi>([^<]+)</[^:]*:?dhEmi>', conteudo, re.IGNORECASE | re.DOTALL)
+            if match:
+                data_str = match.group(1).strip()
+                try:
+                    if '+' in data_str:
+                        data_str = data_str.split('+')[0]
+                    elif 'Z' in data_str:
+                        data_str = data_str.replace('Z', '')
+                    
+                    dt = datetime.fromisoformat(data_str)
+                    return dt.strftime("%d/%m/%Y %H:%M")
+                except:
+                    return data_str[:16] if len(data_str) >= 16 else data_str
+            
+            return '-'
+            
+        except Exception as e:
+            return '-'
+    
+    def _atualizar_contagem_com_xml(self):
+        """Atualiza a contagem incluindo XMLs e PDFs."""
+        qtd_boletos = 0
+        qtd_nfs = 0
+        qtd_xmls = 0
+        qtd_pdfs_xml = 0
+        qtd_grupos = 0
+        total = 0
+        marcados = 0
+        
+        ultimo_numero = None
+        for item_id in self.tree_resultados.get_children(''):
+            valores = self.tree_resultados.item(item_id)['values']
+            
+            if valores[1] == '───':
+                continue
+            
+            total += 1
+            tipo = valores[1]
+            numero = valores[2]
+            
+            if tipo == 'BOLETO':
+                qtd_boletos += 1
+            elif tipo == 'NF':
+                qtd_nfs += 1
+            elif tipo == 'XML':
+                qtd_xmls += 1
+            elif tipo == 'PDF-XML':
+                qtd_pdfs_xml += 1
+            
+            if valores[0] == '☑':
+                marcados += 1
+            
+            # Conta grupos únicos
+            if numero != ultimo_numero and numero != '───':
+                qtd_grupos += 1
+                ultimo_numero = numero
+        
+        # Monta o texto da contagem
+        partes = [f"{qtd_boletos} boleto(s)", f"{qtd_nfs} NF(s)"]
+        if qtd_xmls > 0:
+            partes.append(f"{qtd_xmls} XML(s)")
+        if qtd_pdfs_xml > 0:
+            partes.append(f"{qtd_pdfs_xml} PDF(s)")
+        partes.append(f"{qtd_grupos} grupo(s)")
+        partes.append(f"{marcados}/{total} marcado(s)")
+        
+        self.lbl_contagem.config(text=" | ".join(partes))
     
     def _extrair_clientes_async(self):
         """Extrai nomes de clientes dos PDFs em thread separada.
@@ -1246,6 +1631,10 @@ class BuscaBoletoApp:
             self.conectar_com_modal(callback=self.buscar_por_data)
             return
         
+        # Verifica se a conexão ainda está ativa (pode ter caído por inatividade)
+        if not self.verificar_e_reconectar(callback=self.buscar_por_data):
+            return
+        
         periodo = f"{data_inicio_str} a {data_fim_str}"
         self.atualizar_status(f"Buscando boletos e NFs de {periodo}...")
         
@@ -1315,6 +1704,17 @@ class BuscaBoletoApp:
             
             # Extrai nomes de clientes em thread separada
             self._extrair_clientes_async()
+            
+            # Busca XMLs de NFSe automaticamente
+            # Coleta números únicos dos documentos encontrados
+            numeros_unicos = set()
+            for caminho, nome, data_mod, tipo in resultados:
+                numero_doc = self._extrair_numero_documento(nome)
+                if numero_doc and numero_doc != '0':
+                    numeros_unicos.add(numero_doc)
+            
+            if numeros_unicos:
+                self._buscar_xmls_nfse_async(list(numeros_unicos))
     
     def selecionar_todos(self):
         """Marca todos os checkboxes na lista de resultados."""
@@ -1333,6 +1733,18 @@ class BuscaBoletoApp:
             messagebox.showwarning("Aviso", "Conecte ao servidor SFTP primeiro.")
             return
         
+        # Verifica se precisa baixar algum arquivo do servidor (não local)
+        precisa_sftp = False
+        for item_id in marcados:
+            valores = self.tree_resultados.item(item_id)['values']
+            if valores[1] not in ('───', 'XML', 'PDF-XML'):
+                precisa_sftp = True
+                break
+        
+        # Se precisa do SFTP, verifica se a conexão ainda está ativa
+        if precisa_sftp and not self.verificar_e_reconectar(callback=self.baixar_selecionado):
+            return
+        
         # Se apenas um arquivo marcado, baixa direto
         if len(marcados) == 1:
             self._baixar_unico(marcados[0])
@@ -1341,7 +1753,7 @@ class BuscaBoletoApp:
             self._baixar_multiplos(marcados)
     
     def _baixar_unico(self, item_id: str):
-        """Baixa um único arquivo (boleto ou NF)."""
+        """Baixa um único arquivo (boleto, NF ou XML)."""
         item = self.tree_resultados.item(item_id)
         valores = item['values']
         
@@ -1353,6 +1765,19 @@ class BuscaBoletoApp:
         tipo = valores[1]   # Índice 1 - tipo
         nome = valores[5]   # Índice 5 - nome do arquivo
         caminho = valores[6]  # Índice 6 - caminho (oculto)
+        
+        # Se for XML ou PDF-XML, o arquivo já está local
+        if tipo in ('XML', 'PDF-XML'):
+            if os.path.exists(caminho):
+                self.atualizar_status(f"Arquivo {tipo} já disponível: {caminho}")
+                if messagebox.askyesno(
+                    f"Arquivo {tipo}",
+                    f"O arquivo '{nome}' já está salvo em:\n\n{caminho}\n\nDeseja abrir o arquivo?"
+                ):
+                    self.abrir_arquivo(caminho)
+            else:
+                messagebox.showerror("Erro", f"Arquivo {tipo} não encontrado: {caminho}")
+            return
         
         self.atualizar_status(f"Baixando {tipo}: {nome}...")
         self.mostrar_progresso(True)
@@ -1415,6 +1840,7 @@ class BuscaBoletoApp:
         
         def baixar_thread():
             arquivos_baixados = []
+            arquivos_xml_locais = []  # XMLs já estão locais
             erros = []
             tipos_baixados = set()
             
@@ -1424,17 +1850,38 @@ class BuscaBoletoApp:
                     self.root.after(0, lambda idx=i, total=qtd, n=nome, t=tipo: 
                         self.atualizar_status(f"Baixando {idx}/{total} ({t}): {n}..."))
                     
-                    sucesso, resultado = self.ftp_client.baixar_boleto(caminho, nome)
-                    if sucesso:
-                        arquivos_baixados.append(resultado)
-                        tipos_baixados.add(tipo)
+                    # XMLs e PDFs gerados já estão locais, não precisam ser baixados
+                    if tipo in ('XML', 'PDF-XML'):
+                        if os.path.exists(caminho):
+                            arquivos_xml_locais.append(caminho)
+                            tipos_baixados.add(tipo)
+                        else:
+                            erros.append(f"{nome}: Arquivo não encontrado")
                     else:
-                        erros.append(f"{nome}: {resultado}")
+                        sucesso, resultado = self.ftp_client.baixar_boleto(caminho, nome)
+                        if sucesso:
+                            arquivos_baixados.append(resultado)
+                            tipos_baixados.add(tipo)
+                        else:
+                            erros.append(f"{nome}: {resultado}")
                 
-                # Cria arquivo ZIP se houver arquivos baixados
-                if arquivos_baixados:
+                # Junta arquivos baixados + XMLs locais
+                todos_arquivos = arquivos_baixados + arquivos_xml_locais
+                
+                # Cria arquivo ZIP se houver arquivos
+                if todos_arquivos:
                     # Determina o prefixo do nome do ZIP baseado nos tipos
-                    if 'NF' in tipos_baixados and 'BOLETO' in tipos_baixados:
+                    tem_xml = 'XML' in tipos_baixados or 'PDF-XML' in tipos_baixados
+                    if tem_xml:
+                        if 'NF' in tipos_baixados and 'BOLETO' in tipos_baixados:
+                            prefixo = "NFBOL_XML"
+                        elif 'NF' in tipos_baixados:
+                            prefixo = "NF_XML"
+                        elif 'BOLETO' in tipos_baixados:
+                            prefixo = "BOL_XML"
+                        else:
+                            prefixo = "XML"
+                    elif 'NF' in tipos_baixados and 'BOLETO' in tipos_baixados:
                         prefixo = "NFBOL"
                     elif 'NF' in tipos_baixados:
                         prefixo = "NF"
@@ -1448,17 +1895,17 @@ class BuscaBoletoApp:
                     zip_path = os.path.join(self.ftp_client.pasta_download, zip_nome)
                     
                     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                        for arquivo in arquivos_baixados:
+                        for arquivo in todos_arquivos:
                             zipf.write(arquivo, os.path.basename(arquivo))
                     
-                    # Remove os arquivos individuais após criar o ZIP
+                    # Remove os arquivos individuais após criar o ZIP (exceto XMLs que já existiam)
                     for arquivo in arquivos_baixados:
                         try:
                             os.remove(arquivo)
                         except:
                             pass
                     
-                    self.root.after(0, lambda zp=zip_path, qtd_ok=len(arquivos_baixados), qtd_err=len(erros): 
+                    self.root.after(0, lambda zp=zip_path, qtd_ok=len(todos_arquivos), qtd_err=len(erros): 
                         self._baixar_multiplos_callback(True, zp, qtd_ok, qtd_err, erros))
                 else:
                     self.root.after(0, lambda: 

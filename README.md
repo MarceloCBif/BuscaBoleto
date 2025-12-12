@@ -15,6 +15,7 @@ Sistema para busca e download de boletos e notas fiscais de um servidor SFTP com
 - ✅ Ordenação por colunas
 - ✅ Interface gráfica amigável com Tkinter
 - ✅ Restrição de acesso por IP (rede interna)
+- ✅ **Consulta de XML da NFSe via API SEFIN** (Novo!)
 
 ## 📁 Estrutura do Projeto
 
@@ -23,6 +24,7 @@ BuscaBoleto/
 ├── main.py              # Arquivo principal para executar
 ├── interface.py         # Interface gráfica Tkinter
 ├── ftp_client.py        # Cliente SFTP para conexão e download
+├── nfse_client.py       # Cliente para consulta de NFSe via API SEFIN
 ├── pdf_utils.py         # Utilitários para extração de dados do PDF
 ├── build_exe.py         # Script para gerar executável
 ├── config.ini           # Arquivo de configuração (não versionado)
@@ -59,6 +61,12 @@ pasta_download = "downloads"
 [BUSCA]
 extensoes_permitidas = .pdf,.PDF
 timeout = 30
+
+[ENDPOINTS]
+# Configurações para consulta de NFSe via API SEFIN
+endpoint_nfse_iddps = "https://sefin.nfse.gov.br/SefinNacional/dps/"
+endpoint_nfse_chave_acesso = "https://sefin.nfse.gov.br/SefinNacional/nfse/"
+prefixo_iddps = "SEU_PREFIXO_IDDPS"
 ```
 
 ### Opção 2: Variáveis de Ambiente
@@ -133,10 +141,23 @@ python main.py
 
 ## 🖥️ Como Usar
 
+### Busca de Boletos e NFs (SFTP)
+
 1. **Buscar**: Digite o número do documento no campo de busca e clique em "Buscar" (conexão automática)
 2. **Filtrar por data**: Use os campos de data para buscar por período
 3. **Selecionar**: Marque os checkboxes dos arquivos desejados
 4. **Baixar**: Clique em "Baixar ZIP" para baixar os arquivos selecionados em um arquivo compactado
+
+### Busca de XML NFSe (API SEFIN)
+
+1. **Configurar**: Certifique-se de que a seção `[ENDPOINTS]` está configurada no `config.ini`
+2. **Informar número**: Digite o número da NFSe no campo "Número da NFSe"
+3. **Buscar**: Clique em "📄 Buscar XML NFSe"
+4. **Resultado**: O sistema irá:
+   - Consultar o ID DPS para obter a Chave de Acesso
+   - Consultar a NFSe para obter o XML
+   - Decodificar e salvar o arquivo XML na pasta de downloads
+5. **Abrir**: Após o download, você pode abrir o arquivo XML diretamente
 
 ## 📦 Gerando Executável
 
@@ -161,6 +182,7 @@ O executável será gerado em `dist/BuscaBoleto.exe`.
 ```
 paramiko>=3.0.0
 pdfplumber>=0.10.0
+requests>=2.28.0
 pyinstaller>=6.0.0
 ```
 
@@ -176,6 +198,23 @@ Classe `SFTPClient` responsável por:
 - Baixar arquivos
 - Auto-reconexão em caso de falha
 
+### nfse_client.py
+
+Classe `NFSeClient` responsável por:
+- Construir o ID DPS a partir do número da NFSe
+- Consultar a API SEFIN para obter a Chave de Acesso
+- Consultar a API SEFIN para obter o XML da NFSe
+- Decodificar o XML compactado em GZip Base64
+- Salvar o XML em arquivo local
+
+**Fluxo de consulta NFSe:**
+1. Usuário informa o número da NFSe (ex: 29)
+2. Sistema monta o ID DPS: `prefixo + numero(17 dígitos)` = `DPS420540724779166800024900900000000000000029`
+3. Consulta endpoint `/dps/{id_dps}` para obter `chaveAcesso`
+4. Consulta endpoint `/nfse/{chaveAcesso}` para obter `nfseXmlGZipB64`
+5. Decodifica Base64, descompacta GZip
+6. Salva o XML em arquivo
+
 ### pdf_utils.py
 
 Classe `BoletoExtractor` responsável por:
@@ -189,6 +228,7 @@ Classe `BoletoExtractor` responsável por:
 Interface gráfica com:
 - Campo de busca com máscara
 - Filtros por data e filial
+- **Campo para consulta de XML NFSe** (Novo!)
 - Lista de resultados com checkboxes
 - Agrupamento por documento (NF + Boleto)
 - Botões de ação

@@ -7,5 +7,14 @@ paramiko>=3.0.0
 # pdfplumber - Para leitura de PDFs (caso precise extrair dados do boleto)
 pdfplumber>=0.9.0
 
+# requests - Para consultas HTTP à API SEFIN (NFSe)
+requests>=2.28.0
+
+# requests-pkcs12 - Para autenticação com certificado digital (.pfx/.p12)
+requests-pkcs12>=1.20
+
+# ReportLab - Para geração de PDF a partir do XML de NFSe
+reportlab>=4.0.0
+
 # Tkinter já vem instalado com Python padrão (não precisa instalar)
 # configparser já vem instalado com Python padrão (não precisa instalar)
