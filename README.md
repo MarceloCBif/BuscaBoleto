@@ -1,10 +1,10 @@
-# 🔍 Busca Boleto SFTP
+# 🔍 Utilitários de Notas e Boletos
 
 Sistema para busca e download de boletos, notas fiscais e NFSe de um servidor SFTP com interface gráfica, incluindo integração com a API SEFIN para consulta de XML e PDF de NFSe.
 
 ## 📋 Funcionalidades
 
-### Boletos e NFs (SFTP)
+### Boletos e NFs (Via SFTP)
 - ✅ Conexão automática com servidor SFTP
 - ✅ Reconexão automática em caso de perda de conexão
 - ✅ Busca de boletos e NFs pelo número
@@ -17,7 +17,7 @@ Sistema para busca e download de boletos, notas fiscais e NFSe de um servidor SF
 - ✅ Ordenação por colunas
 - ✅ Restrição de acesso por IP (rede interna)
 
-### NFSe (API SEFIN)
+### NFSe (Via API SEFIN)
 - ✅ **Consulta automática de XML da NFSe** via API SEFIN
 - ✅ **Download automático de PDF da NFSe** via API SEFIN
 - ✅ **Autenticação com certificado digital** (.pfx)
@@ -184,7 +184,7 @@ Ao buscar boletos e NFs, o sistema **automaticamente**:
 O sistema utiliza certificado digital (.pfx) para autenticação na API SEFIN:
 
 1. **Construção do ID DPS**: `prefixo + numero(17 dígitos)`
-   - Exemplo: `DPS420540724779166800024900900000000000000029`
+   - Exemplo: `DPS110540724779166800024900900000000000000029`
 2. **Consulta Chave de Acesso**: Endpoint `/dps/{id_dps}`
 3. **Consulta XML**: Endpoint `/nfse/{chaveAcesso}`
 4. **Download PDF**: Endpoint `/danfse/{chaveAcesso}`
@@ -296,7 +296,3 @@ Interface gráfica com:
 - Você pode usar chave privada RSA em vez de senha para autenticação
 - **NFSe**: Requer certificado digital válido (.pfx) para consulta na API SEFIN
 - **Reconexão**: O sistema detecta perda de conexão e reconecta automaticamente
-
-## 📄 Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
