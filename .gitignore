@@ -50,6 +50,7 @@ venv.bak/
 
 # Configuração com dados sensíveis
 config.ini
+/certificados
 
 # Pasta de downloads local
 downloads/
